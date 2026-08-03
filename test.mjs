@@ -134,6 +134,15 @@ console.log('\n=== §8 · SYNC — two phones edit at once, and the merge keeps 
   ok(K.turnoverProgress(mc, 'yurt').done === 2, 'a checklist tick from each phone both survive the merge');
 }
 
+console.log('\n=== §9 · REPO STORE — the board round-trips through GitHub-style base64 (UTF-8 safe) ===');
+{
+  const S = newState('A'); addTask(S, { unit: 'yurt', title: 'Café £5 · résumé · 🔥 wasps', note: 'ünïcode', ts: 1 });
+  const enc = K.b64EncodeUtf8(exportState(S));
+  const round = importState(K.b64DecodeUtf8(enc));
+  ok(round && openFor(round, 'yurt')[0].title.includes('£5') && openFor(round, 'yurt')[0].title.includes('🔥'), 'the board survives base64 encode→decode with £, accents and emoji intact (what gets committed to the repo)');
+  ok(stateHash(round) === stateHash(S), 'and it is byte-for-byte the same board after the repo round-trip');
+}
+
 const done = fail === 0;
 console.log('\n' + (done
   ? `=== ✅ WISHWOOD KEEPER — jobs, issues and off-grid supply logs for the four camps, on one board; the urgent stuff surfaces, a low supply raises itself, nothing is lost in a message · ${pass}/${pass} · zero tokens ===`

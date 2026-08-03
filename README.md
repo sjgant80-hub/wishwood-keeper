@@ -21,28 +21,34 @@ tick things off. No login, no app store, no server.**
 
 Everything is saved on the device and works fully offline. It's the four camps' housekeeping in one calm place.
 
-## Share it between phones (sync)
+## Share it between phones — the board lives in your GitHub repo
 
-Optional, and sovereign — no SaaS. Every phone with the same **board code** sees the same live board; each still
-works offline and catches up when there's signal. Two phones can edit at the same time and **nothing gets
-clobbered** — the merge is conflict-free (device-unique ids, last-write-wins per record, deletes propagate).
+No server, no SaaS. The shared board is a file — **`board.json`** in a small repo of yours
+([`wishwood-keeper-data`](https://github.com/sjgant80-hub/wishwood-keeper-data)). Every phone **reads it and
+commits changes back** through the GitHub API, so everyone sees the same live board. It still works offline and
+catches up when there's signal. Two phones editing at once **merge cleanly** — the merge is conflict-free
+(device-unique ids, last-write-wins per record, deletes propagate; a commit conflict just re-reads, re-merges and
+retries).
 
-Turn it on once:
+**One-time setup:**
+1. GitHub → **Settings → Developer settings → Fine-grained tokens → Generate new token**.
+2. **Repository access → Only select repositories →** `wishwood-keeper-data`.
+3. **Permissions → Repository → Contents → Read and write**. Generate, copy the token.
+4. In the app, tap the **⚪ Local only** pill → paste the token (the repo is pre-filled) → **Turn sync on** →
+   **🔗 Copy invite link** → send it to the team. They open the link and they're on the same board.
 
-```bash
-# deploy the tiny worker to YOUR Cloudflare (free tier)
-npx wrangler kv namespace create KEEPER   # paste the printed id into wrangler.toml
-npx wrangler deploy                       # prints your worker URL
-```
+Why a *separate* data repo: the write token can only touch `board.json` there, so it can never change the live app
+or any other repo. The token is stored **on the phone / in the invite link — never in the app's source**, so
+GitHub's secret-scanning won't revoke it.
 
-Then in the app tap the **⚪ Local only** pill → paste the worker URL → tap **✨ new** for a board code → **Turn
-sync on** → **🔗 Copy invite link** and send it to the team. They open the link and they're on the same board.
-(Or fold the two `/b/:code` routes into Wishwood's existing worker instead of deploying a new one.)
+*Honest note:* the token is a **write key** — anyone with the invite link can edit the board (and only that data
+repo). That's right for a small trusted team; keep the link private. Reads come straight from the API (fresh, no
+CDN lag); each change is one small commit, so the repo carries a full history of the board.
 
-*Honest note:* the board **code is the key** — anyone with the code/link can read and edit the board. That's right
-for a small trusted team; use the long generated code and don't post the link publicly.
+*(An alternative Cloudflare-Worker transport — `sync-worker.js` — is also in the repo if you'd rather not use a
+GitHub token; the app's merge is identical either way.)*
 
-## Proven — `node test.mjs`, zero tokens, 36/36
+## Proven — `node test.mjs`, zero tokens, 38/38
 
 `§1` jobs land on the right camp, urgent sorts to the top · `§2` done / reopen / delete keep the counts honest ·
 `§3` **the magic** — a low supply reading auto-raises an urgent job, deduped, and the loop re-arms after it's done ·

@@ -141,8 +141,12 @@ export function merge(a, b) {
 // a cheap content hash of the shareable board — so the sync loop only pushes when something actually changed.
 export function stateHash(S) { const core = { tasks: (S.tasks || []).map(t => [t.id, t.updated, t.deleted]).sort(), logs: (S.logs || []).map(r => r.id).sort(), checks: Object.entries(S.checks || {}).map(([k, c]) => [k, cval(c).t, cval(c).v]).sort() }; const s = JSON.stringify(core); let h = 0x811c9dc5 >>> 0; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0; return (h >>> 0).toString(16); }
 
+// ── UTF-8-safe base64 (the board.json is committed to the repo base64-encoded via the GitHub API) ──
+export function b64EncodeUtf8(s) { const bytes = new TextEncoder().encode(String(s)); let bin = ''; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]); return btoa(bin); }
+export function b64DecodeUtf8(b) { const bin = atob(String(b).replace(/\s/g, '')); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); return new TextDecoder().decode(bytes); }
+
 // ── SOVEREIGN BACKUP — export / import the whole board as portable JSON (yours to keep, no server) ──
 export function exportState(S) { return JSON.stringify({ v: 1, dev: S.dev || 'local', tasks: S.tasks, logs: S.logs, checks: S.checks || {}, seq: S.seq }); }
 export function importState(json) { try { const o = typeof json === 'string' ? JSON.parse(json) : json; if (!o || !Array.isArray(o.tasks) || !Array.isArray(o.logs)) return null; return { v: 1, dev: o.dev || 'local', tasks: o.tasks, logs: o.logs, checks: (o.checks && typeof o.checks === 'object') ? o.checks : {}, seq: clampNum(o.seq, 1) || 1 }; } catch { return null; } }
 
-export default { UNITS, METERS, CHECKLIST, CATEGORIES, PRIORITIES, newState, setDevice, addTask, completeTask, reopenTask, deleteTask, setPriority, openFor, logReading, latestReading, readingHistory, lowSupplies, attention, stats, doneTasks, checklistFor, toggleCheck, resetTurnover, turnoverProgress, merge, stateHash, exportState, importState };
+export default { UNITS, METERS, CHECKLIST, CATEGORIES, PRIORITIES, newState, setDevice, addTask, completeTask, reopenTask, deleteTask, setPriority, openFor, logReading, latestReading, readingHistory, lowSupplies, attention, stats, doneTasks, checklistFor, toggleCheck, resetTurnover, turnoverProgress, merge, stateHash, b64EncodeUtf8, b64DecodeUtf8, exportState, importState };
