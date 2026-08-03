@@ -93,13 +93,41 @@
   footer{margin-top:22px;color:var(--dim);font-size:11.5px;text-align:center;line-height:1.7}
   footer b{color:var(--muted)}
   .doneitem{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--muted);padding:6px 0;border-bottom:1px solid var(--border)}
+  /* sync */
+  .pill{font-size:12.5px;font-weight:600;padding:7px 12px;border-radius:999px;background:var(--deep);border:1px solid var(--border-strong);color:var(--muted);white-space:nowrap}
+  .pill.on{color:var(--leaf);border-color:var(--moss-bright)} .pill.err{color:var(--warn);border-color:var(--warn)}
+  dialog{border:1px solid var(--border-strong);border-radius:16px;background:var(--surface);color:var(--text);padding:0;max-width:440px;width:92%}
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  .dlg{padding:18px 20px} .dlg .dlgL{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+  .dlg .line{display:flex;gap:8px} .dlg .line input{flex:1}
+  .dlg input{margin:0} .mini{font-size:12px;color:var(--muted);line-height:1.5}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="rowb">
-    <div><h1>Wishwood <span>Keeper</span></h1><div class="sub">Site housekeeping · four camps · on your phone, offline</div></div>
+    <div><h1>Wishwood <span>Keeper</span></h1><div class="sub">Site housekeeping · four camps · on your phone</div></div>
+    <button id="syncPill" class="pill" title="Sharing between phones">⚪ Local only</button>
   </div>
+
+  <!-- SYNC SETTINGS -->
+  <dialog id="syncDlg">
+    <form method="dialog" class="dlg">
+      <div class="eyebrow">Share this board between phones</div>
+      <p class="mini" style="margin:4px 0 12px">Everyone with the same <b>board code</b> sees the same live board. It still works offline and catches up when there's signal.</p>
+      <label class="dlgL">Sync server (your Cloudflare worker URL)</label>
+      <input id="syncUrl" placeholder="https://wishwood-keeper-sync.….workers.dev" />
+      <label class="dlgL">Board code</label>
+      <div class="line"><input id="syncCode" placeholder="a shared code" /><button type="button" id="genCode" class="chip">✨ new</button></div>
+      <div class="tools" style="margin-top:12px">
+        <button type="button" id="syncSave" class="pri">Turn sync on</button>
+        <button type="button" id="syncOff" class="chip">Turn off</button>
+        <button type="button" id="syncInvite" class="chip">🔗 Copy invite link</button>
+      </div>
+      <p class="mini" id="syncHelp" style="margin-top:12px">Deploy the little worker once (see the repo's README), paste its URL here, tap <b>✨ new</b> for a code, then <b>Copy invite link</b> and send it to the team — they just open it.</p>
+      <div style="text-align:right;margin-top:8px"><button class="chip">Close</button></div>
+    </form>
+  </dialog>
 
   <!-- NEEDS ATTENTION -->
   <section class="card" id="attCard" style="border-color:var(--border-strong)">
@@ -166,8 +194,10 @@ const KEY = 'wishwood-keeper-v1';
 let S = load();
 let addUnit = 'yurt', addUrgent = false, supUnit = 'yurt', ckUnit = 'yurt';
 
-function load(){ try{ const raw=localStorage.getItem(KEY); if(raw){ const s=K.importState(raw); if(s) return s; } }catch(e){} return seed(); }
-function save(){ try{ localStorage.setItem(KEY, K.exportState(S)); }catch(e){} }
+// this device's own short id — so the jobs THIS phone adds never collide with another phone's (conflict-free sync)
+function deviceId(){ let d=localStorage.getItem('wk-dev'); if(!d){ d=(Math.random().toString(36).slice(2,7)); localStorage.setItem('wk-dev',d); } return d; }
+function load(){ let s=null; try{ const raw=localStorage.getItem(KEY); if(raw) s=K.importState(raw); }catch(e){} if(!s) s=seed(); K.setDevice(s, deviceId()); return s; }
+function save(){ try{ localStorage.setItem(KEY, K.exportState(S)); }catch(e){} schedulePush(); }
 function seed(){ // first-run board with the real jobs Chrissy gave
   const s=K.newState(); const now=Date.now();
   ['yurt','fern','caravan','hobbit'].forEach(u=>K.addTask(s,{unit:u,title:'Install / get Wi-Fi working',category:'maintenance',ts:now}));
@@ -212,8 +242,9 @@ function render(){ const now=Date.now();
   $('#checklist').innerHTML = K.checklistFor(S, ckUnit).map(c=>`<div class="ck ${c.done?'done':''}" data-cki="${c.i}"><div class="box">✓</div><div class="lbl">${esc(c.item)}</div></div>`).join('');
 
   // done list
-  const done = S.tasks.filter(t=>t.status==='done').sort((a,b)=>b.done_at-a.done_at).slice(0,12);
-  $('#doneSummary').textContent = `Done recently · ${S.tasks.filter(t=>t.status==='done').length}`;
+  const allDone = K.doneTasks(S);
+  const done = allDone.slice().sort((a,b)=>b.done_at-a.done_at).slice(0,12);
+  $('#doneSummary').textContent = `Done recently · ${allDone.length}`;
   $('#doneList').innerHTML = done.length? done.map(t=>`<div class="doneitem"><span>${esc(t.title)}</span><button class="chip" data-reopen="${t.id}">reopen</button></div>`).join('') : '<div class="empty">Nothing done yet.</div>';
   save();
 }
@@ -257,7 +288,40 @@ $('#print').onclick = ()=>{
 };
 function fallbackPrint(txt){ const w=window.open('','_blank'); if(w){ w.document.write('<pre style="font:14px monospace;white-space:pre-wrap;padding:20px">'+esc(txt)+'</pre>'); w.document.close(); w.print(); } else { navigator.clipboard?.writeText(txt); alert('Board copied to clipboard.'); } }
 
+// ── SYNC: share the board between phones via the tiny worker (a dumb store); the MERGE happens here (keeper.mjs) ──
+let sync = (()=>{ try{ return JSON.parse(localStorage.getItem('wk-sync')||'null')||{url:'',code:''}; }catch{ return {url:'',code:''}; } })();
+(function(){ const q=new URLSearchParams(location.search); const u=q.get('sync'), c=q.get('code');   // join via an invite link
+  if(u&&c){ sync={url:u,code:c}; localStorage.setItem('wk-sync',JSON.stringify(sync)); history.replaceState(null,'',location.pathname); } })();
+const syncOn = ()=> !!(sync.url && sync.code);
+function setSync(txt,cls){ const p=$('#syncPill'); if(p){ p.textContent=txt; p.className='pill'+(cls?(' '+cls):''); } }
+let pushT=null; function schedulePush(){ if(!syncOn()) return; clearTimeout(pushT); pushT=setTimeout(syncTick,700); }
+let syncing=false;
+async function syncTick(){
+  if(!syncOn()){ setSync('⚪ Local only'); return; } if(syncing) return; syncing=true;
+  try{
+    const base=sync.url.replace(/\/+$/,'')+'/b/'+encodeURIComponent(sync.code);
+    const rj=await (await fetch(base,{cache:'no-store'})).json();
+    const remote=(rj && !rj.empty && Array.isArray(rj.tasks)) ? K.importState(rj) : null;
+    const merged=remote ? K.merge(S, remote) : S;
+    if(remote && K.stateHash(merged)!==K.stateHash(S)){ K.setDevice(merged, deviceId()); S=merged; try{localStorage.setItem(KEY,K.exportState(S));}catch(e){} render(); }
+    if(!remote || K.stateHash(merged)!==K.stateHash(remote)){ await fetch(base,{method:'PUT',headers:{'Content-Type':'application/json'},body:K.exportState(merged)}); }
+    setSync('🟢 Synced','on');
+  }catch(e){ setSync('🔴 Offline — catches up','err'); }
+  finally{ syncing=false; }
+}
+setInterval(syncTick, 4500);
+
+$('#syncPill').onclick=()=>{ $('#syncUrl').value=sync.url||''; $('#syncCode').value=sync.code||''; $('#syncDlg').showModal(); };
+$('#genCode').onclick=()=>{ $('#syncCode').value='ww-'+Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,6); };
+$('#syncSave').onclick=()=>{ const url=$('#syncUrl').value.trim(), code=$('#syncCode').value.trim(); if(!url||!code){ alert('Paste the worker URL and a board code.'); return; } sync={url,code}; localStorage.setItem('wk-sync',JSON.stringify(sync)); $('#syncDlg').close(); setSync('🟡 Syncing…'); syncTick(); };
+$('#syncOff').onclick=()=>{ sync={url:'',code:''}; localStorage.removeItem('wk-sync'); $('#syncDlg').close(); setSync('⚪ Local only'); };
+$('#syncInvite').onclick=()=>{ const url=$('#syncUrl').value.trim(), code=$('#syncCode').value.trim(); if(!url||!code){ alert('Set the URL and code first.'); return; }
+  const link=location.origin+location.pathname+'?sync='+encodeURIComponent(url)+'&code='+encodeURIComponent(code);
+  if(navigator.share) navigator.share({title:'Wishwood Keeper',text:'Open to join the shared board:',url:link}).catch(()=>copyLink(link)); else copyLink(link); };
+function copyLink(t){ if(navigator.clipboard) navigator.clipboard.writeText(t).then(()=>alert('Invite link copied — send it to the team.'),()=>prompt('Copy this link:',t)); else prompt('Copy this link:',t); }
+
 render();
+setSync(syncOn()?'🟡 Syncing…':'⚪ Local only'); if(syncOn()) syncTick();
 if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
 </script>
 </body>

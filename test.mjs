@@ -2,7 +2,7 @@
 // thread can't: urgent jobs surface, a noticed low supply becomes a task automatically (deduped), NOTHING that
 // needs attention is ever hidden, and the whole board is portable (export/import round-trips). Deterministic.
 import K from './keeper.mjs';
-const { newState, addTask, completeTask, reopenTask, deleteTask, openFor, logReading, latestReading, lowSupplies, attention, stats, exportState, importState, UNITS, METERS } = K;
+const { newState, setDevice, addTask, completeTask, reopenTask, deleteTask, openFor, logReading, latestReading, lowSupplies, attention, stats, merge, stateHash, exportState, importState, UNITS, METERS } = K;
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log((c ? '  ✓ ' : '  ✗ FAIL ') + m); };
@@ -28,7 +28,7 @@ console.log('\n=== §2 · LIFECYCLE — done, reopen, delete, and the counts sta
   completeTask(S, a.id, 10);
   ok(stats(S).open === 1 && stats(S).done === 1, 'completing a job moves it to done (still on the record, not deleted)');
   reopenTask(S, a.id); ok(stats(S).open === 2, 'a job can be reopened');
-  deleteTask(S, a.id); ok(stats(S).open === 1 && !S.tasks.some(t => t.id === a.id), 'a job can be removed entirely');
+  deleteTask(S, a.id); ok(stats(S).open === 1 && !openFor(S, 'hobbit').some(t => t.id === a.id), 'a job can be removed — gone from every view (a tombstone stays, so the delete syncs)');
 }
 
 console.log('\n=== §3 · THE MAGIC — a low supply reading AUTO-RAISES an urgent job (deduped) ===');
@@ -97,6 +97,41 @@ console.log('\n=== §6 · DETERMINISM + FUZZ ===');
   ok(!threw, 'bad units / bad supplies / missing ids / junk values never throw');
   const S = newState(); const r = addTask(S, { unit: 'nowhere', title: 'Fallback', priority: 'bogus', category: 'nope', ts: 1 }).task;
   ok(r.unit === 'site' && r.priority === 'normal', 'an unknown unit/priority falls back to sensible defaults instead of breaking');
+}
+
+console.log('\n=== §8 · SYNC — two phones edit at once, and the merge keeps BOTH (nothing clobbered) ===');
+{
+  // two devices start from the same board, then edit OFFLINE, independently.
+  const base = newState('A'); addTask(base, { unit: 'yurt', title: 'Shared job', ts: 1 });
+  const A = importState(exportState(base)); setDevice(A, 'A');
+  const B = importState(exportState(base)); setDevice(B, 'B');
+  const jaA = addTask(A, { unit: 'fern', title: 'A adds: fix tap', ts: 10 }).task;
+  const jbB = addTask(B, { unit: 'hobbit', title: 'B adds: sweep flue', priority: 'urgent', ts: 11 }).task;
+  ok(jaA.id !== jbB.id && jaA.id.includes('-A-') && jbB.id.includes('-B-'), 'each phone mints device-unique ids — no collision is even possible');
+  const m = merge(A, B);
+  ok(m.tasks.filter(t => !t.deleted).length === 3, 'the merge keeps ALL THREE jobs — neither phone\'s new job is lost');
+  ok(openFor(m, 'fern').some(t => /fix tap/.test(t.title)) && openFor(m, 'hobbit').some(t => /sweep flue/.test(t.title)), 'both phones\' jobs land on the right camps after the merge');
+
+  // ORDER-INDEPENDENT + IDEMPOTENT
+  ok(stateHash(merge(A, B)) === stateHash(merge(B, A)), 'merge is order-independent — A⊕B and B⊕A give the same board');
+  ok(stateHash(merge(m, m)) === stateHash(m), 'merge is idempotent — syncing twice changes nothing');
+
+  // LAST-WRITE-WINS on the SAME record: B completes the shared job later than A touches it → B wins
+  const A2 = importState(exportState(m)), B2 = importState(exportState(m)); setDevice(A2, 'A'); setDevice(B2, 'B');
+  const shared = m.tasks.find(t => t.title === 'Shared job').id;
+  completeTask(A2, shared, 20); completeTask(B2, shared, 30);            // B later
+  const done1 = merge(A2, B2).tasks.find(t => t.id === shared);
+  ok(done1.status === 'done' && done1.done_at === 30, 'when both edit the same job, the newer change wins (last-write-wins, by time)');
+
+  // a DELETE on one phone propagates (tombstone wins), even against an older copy that still has the job
+  deleteTask(A2, jaA.id, 40);
+  const afterDel = merge(B2, A2);   // B2 still has jaA as live; A2 deleted it later
+  ok(!openFor(afterDel, 'fern').some(t => t.id === jaA.id), 'a delete on one phone removes the job everywhere after sync (tombstone, newest wins)');
+
+  // a checklist tick from each phone both survive
+  K.toggleCheck(A2, 'yurt', 0, 50); K.toggleCheck(B2, 'yurt', 2, 51);
+  const mc = merge(A2, B2);
+  ok(K.turnoverProgress(mc, 'yurt').done === 2, 'a checklist tick from each phone both survive the merge');
 }
 
 const done = fail === 0;

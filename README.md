@@ -21,21 +21,43 @@ tick things off. No login, no app store, no server.**
 
 Everything is saved on the device and works fully offline. It's the four camps' housekeeping in one calm place.
 
-## Proven — `node test.mjs`, zero tokens, 28/28
+## Share it between phones (sync)
+
+Optional, and sovereign — no SaaS. Every phone with the same **board code** sees the same live board; each still
+works offline and catches up when there's signal. Two phones can edit at the same time and **nothing gets
+clobbered** — the merge is conflict-free (device-unique ids, last-write-wins per record, deletes propagate).
+
+Turn it on once:
+
+```bash
+# deploy the tiny worker to YOUR Cloudflare (free tier)
+npx wrangler kv namespace create KEEPER   # paste the printed id into wrangler.toml
+npx wrangler deploy                       # prints your worker URL
+```
+
+Then in the app tap the **⚪ Local only** pill → paste the worker URL → tap **✨ new** for a board code → **Turn
+sync on** → **🔗 Copy invite link** and send it to the team. They open the link and they're on the same board.
+(Or fold the two `/b/:code` routes into Wishwood's existing worker instead of deploying a new one.)
+
+*Honest note:* the board **code is the key** — anyone with the code/link can read and edit the board. That's right
+for a small trusted team; use the long generated code and don't post the link publicly.
+
+## Proven — `node test.mjs`, zero tokens, 36/36
 
 `§1` jobs land on the right camp, urgent sorts to the top · `§2` done / reopen / delete keep the counts honest ·
 `§3` **the magic** — a low supply reading auto-raises an urgent job, deduped, and the loop re-arms after it's done ·
 `§4` **nothing gets lost** — every urgent, overdue and low-supply item surfaces in one list, most-pressing first
 (low-priority "someday" jobs stay out — signal, not noise) · `§5` export/import round-trips the whole board exactly
 (a real backup) · `§7` the maintenance checklist ticks, is per-camp, and resets per turnover · `§6` deterministic +
-fuzz-safe (bad input never breaks it).
+fuzz-safe · `§8` **sync** — two phones editing at once merge with nothing clobbered (order-independent, idempotent,
+last-write-wins, deletes propagate, device-unique ids).
 
 ## Files
 
 `keeper.mjs` (the housekeeping brain — jobs, supply logs with auto-raise, the turnover checklist, the attention
-list, portable backup) · `test.mjs` (the 28/28 gate) · `index.html` (the phone board — attention strip, quick-add,
-per-camp boards, supply logs, maintenance checklist, backup). Built for Wishwood. Zero-dep, offline PWA, your data
-stays yours.
+list, the **conflict-free merge**, portable backup) · `test.mjs` (the 36/36 gate) · `index.html` (the phone board
+— attention strip, quick-add, per-camp boards, supply logs, maintenance checklist, sync, backup) · `sync-worker.js`
++ `wrangler.toml` (the tiny Cloudflare sync store). Built for Wishwood. Zero-dep, offline PWA, your data stays yours.
 
 ```bash
 node test.mjs                 # the proof

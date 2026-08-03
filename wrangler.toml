@@ -1,0 +1,10 @@
+# wrangler.toml — deploy the Wishwood Keeper sync worker to YOUR Cloudflare (free tier).
+#   1)  npx wrangler kv namespace create KEEPER   → copy the printed id below
+#   2)  npx wrangler deploy                        → prints your worker URL
+name = "wishwood-keeper-sync"
+main = "sync-worker.js"
+compatibility_date = "2024-11-01"
+
+[[kv_namespaces]]
+binding = "KEEPER"
+id = "PASTE_YOUR_KV_NAMESPACE_ID_HERE"
