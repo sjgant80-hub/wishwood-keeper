@@ -1,0 +1,12 @@
+[
+  {
+    "mutation": "> → >=",
+    "snippet": "for (const t of [...(a.tasks || []), ...(b.tasks || [])]) { const p = byId.get(t.id); if (",
+    "reason": "Idempotent JSON tie-break: `JSON.stringify(t) > JSON.stringify(p)` is only reached when the two records have EQUAL `updated`; `>` vs `>=` can differ only when `JSON.stringify(t) === JSON.stringify(p)`, i.e. the records are byte-identical, in which case keeping p or swapping to t yields the same record — merge output is unchanged. (The sibling `>` on this line, the `updated` comparison, IS killed by the order-independence test.)"
+  },
+  {
+    "mutation": "< → <=",
+    "snippet": "export function b64DecodeUtf8(b) { const bin = atob(String(b).replace(/\\s/g, '')); const b",
+    "reason": "Out-of-bounds write to a FIXED-LENGTH typed array: `bytes` is `new Uint8Array(bin.length)`; the extra iteration does `bytes[bin.length] = bin.charCodeAt(bin.length)` where charCodeAt past the end is NaN and an index-past-length write on a typed array is silently dropped — the decoded bytes are byte-identical, so b64DecodeUtf8 output is unchanged."
+  }
+]

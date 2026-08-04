@@ -143,6 +143,187 @@ console.log('\n=== §9 · REPO STORE — the board round-trips through GitHub-st
   ok(stateHash(round) === stateHash(S), 'and it is byte-for-byte the same board after the repo round-trip');
 }
 
+console.log('\n=== §H · GATE HARDENING — boundary + branch kills the happy-path tests fly past ===');
+{
+  // — logReading exactly ON the low line (line 83 `v <= m.low`) —
+  const S = newState();
+  const g = logReading(S, { unit: 'yurt', meter: 'gas', value: 1, ts: 1 });   // gas low = 1, value = 1 (equal)
+  ok(g.low === true && g.raised && g.raised.priority === 'urgent', 'a reading EXACTLY on the low line still trips low + raises (≤, not <)');
+
+  // — logReading picks the RIGHT meter by id (line 79 `x.id === meter`) —
+  const S2 = newState();
+  ok(logReading(S2, { unit: 'yurt', meter: 'water', value: 15, ts: 1 }).low === true, 'a reading uses ITS OWN meter threshold (water low=20, so 15 is low) — not a neighbouring meter’s');
+
+  // — logReading entry id carries the device prefix (line 80 `S.dev || ‘local’`) —
+  const S3 = newState(); setDevice(S3, 'A');
+  ok(logReading(S3, { unit: 'yurt', meter: 'oil', value: 5, ts: 1 }).entry.id.startsWith('r-A-'), 'a supply-log id carries the device prefix (offline-unique ids)');
+
+  // — latestReading matches unit AND meter (line 91 `&&`) —
+  const S4 = newState();
+  logReading(S4, { unit: 'yurt', meter: 'oil', value: 5, ts: 1 });
+  logReading(S4, { unit: 'fern', meter: 'oil', value: 9, ts: 2 });
+  ok(latestReading(S4, 'yurt', 'oil').value === 5, 'latestReading matches BOTH unit AND meter, never either');
+
+  // — readingHistory: only matching rows, oldest-first (line 92 both `===` and `&&`) —
+  const S5 = newState();
+  logReading(S5, { unit: 'yurt', meter: 'oil', value: 5, ts: 1 });
+  logReading(S5, { unit: 'yurt', meter: 'oil', value: 5, ts: 2 });
+  logReading(S5, { unit: 'yurt', meter: 'gas', value: 5, ts: 3 });   // same unit, other meter
+  logReading(S5, { unit: 'fern', meter: 'oil', value: 5, ts: 4 });   // other unit, same meter
+  const hist = K.readingHistory(S5, 'yurt', 'oil');
+  ok(hist.length === 2 && hist.every(r => r.unit === 'yurt' && r.meter === 'oil') && hist[0].ts === 1 && hist[1].ts === 2, 'readingHistory returns only the yurt/oil rows, oldest-first — not the fern or gas rows');
+}
+{
+  // — setPriority hits the RIGHT task by id, and rejects a bad priority (line 67 `===` and `||`) —
+  const S = newState();
+  const a = addTask(S, { unit: 'yurt', title: 'first', ts: 1 }).task;
+  const b = addTask(S, { unit: 'yurt', title: 'second', ts: 2 }).task;
+  ok(K.setPriority(S, b.id, 'urgent', 3).ok && b.priority === 'urgent' && a.priority === 'normal', 'setPriority changes the addressed job only, matched by id');
+  ok(!K.setPriority(S, a.id, 'bogus', 4).ok, 'setPriority refuses an invalid priority (guard is OR, not AND)');
+
+  // — importState drops a non-object `checks` to {} (line 150 `o.checks && typeof … === ‘object’`) —
+  const bad = importState('{"tasks":[],"logs":[],"checks":"nope"}');
+  ok(bad && typeof bad.checks === 'object' && !Array.isArray(bad.checks) && Object.keys(bad.checks).length === 0, 'importState coerces a non-object checks field to {} (guard is AND, not OR)');
+}
+{
+  // — stats.byUnit counts each unit (line 113 `t.unit === u.id`) —
+  const S = newState();
+  addTask(S, { unit: 'yurt', title: 'a', ts: 1 }); addTask(S, { unit: 'yurt', title: 'b', ts: 2 }); addTask(S, { unit: 'fern', title: 'c', ts: 3 });
+  const by = stats(S, 0).byUnit;
+  ok(by.yurt === 2 && by.fern === 1 && by.caravan === 0, 'stats.byUnit counts open jobs per camp (matched to the RIGHT unit)');
+
+  // — stats.urgent counts urgents, not the rest (line 114 `priority === ‘urgent’`) —
+  const S2 = newState();
+  addTask(S2, { unit: 'yurt', title: 'u1', priority: 'urgent', ts: 1 });
+  addTask(S2, { unit: 'yurt', title: 'u2', priority: 'urgent', ts: 2 });
+  addTask(S2, { unit: 'yurt', title: 'n1', priority: 'normal', ts: 3 });   // 2 urgent, 1 not — so the count can’t coincide
+  ok(stats(S2, 0).urgent === 2, 'stats.urgent counts the urgent jobs (2), not the non-urgent ones');
+
+  // — stats.done counts DONE jobs (line 114 `status === ‘done’`) — 2 done vs 1 open so the count can’t coincide —
+  const Sd = newState();
+  const d1 = addTask(Sd, { unit: 'yurt', title: 'd1', ts: 1 }).task;
+  const d2 = addTask(Sd, { unit: 'yurt', title: 'd2', ts: 2 }).task;
+  addTask(Sd, { unit: 'yurt', title: 'still open', ts: 3 });
+  completeTask(Sd, d1.id, 4); completeTask(Sd, d2.id, 5);
+  ok(stats(Sd, 0).done === 2, 'stats.done counts the done jobs (2), not the open one');
+
+  // — doneTasks returns only live, done jobs (line 116 `&&` and `=== ‘done’`) —
+  const S3 = newState();
+  const t2 = addTask(S3, { unit: 'yurt', title: 'done', ts: 2 }).task;
+  const t3 = addTask(S3, { unit: 'yurt', title: 'del', ts: 3 }).task;
+  addTask(S3, { unit: 'yurt', title: 'open', ts: 1 });                      // stays open + live
+  completeTask(S3, t2.id, 4);
+  completeTask(S3, t3.id, 5); deleteTask(S3, t3.id, 6);                     // done AND tombstoned
+  const dt = K.doneTasks(S3);
+  ok(dt.length === 1 && dt[0].id === t2.id, 'doneTasks returns only the live, done job — not the open one, not the deleted one');
+}
+{
+  // — a job due EXACTLY at now is not yet overdue (line 72 `due < now`) —
+  const S = newState();
+  addTask(S, { unit: 'yurt', title: 'due now', due: 100, ts: 1 });
+  ok(stats(S, 100).overdue === 0, 'a job due exactly at now is NOT overdue (strict <)');
+  addTask(S, { unit: 'yurt', title: 'past due', due: 99, ts: 1 });
+  ok(stats(S, 100).overdue === 1, 'a job due before now IS overdue');
+}
+{
+  // — toggleCheck rejects out-of-range indices (line 125 `i >= len` and the `||` guard) —
+  const S = newState();
+  ok(K.toggleCheck(S, 'yurt', K.CHECKLIST.length, 1).ok === false, 'toggleCheck rejects an index at/above the checklist length');
+  ok(K.toggleCheck(S, 'yurt', -1, 1).ok === false, 'toggleCheck rejects a negative index');
+
+  // — resetTurnover writes exactly one key per item, none out of range (line 126 `i < len`) —
+  const S2 = newState(); K.resetTurnover(S2, 'yurt', 1);
+  ok(Object.keys(S2.checks).length === K.CHECKLIST.length, 'resetTurnover writes exactly one entry per checklist item (no out-of-range key)');
+
+  // — turnoverProgress counts only real items, ignoring a stray imported key (line 127 `i < len`) —
+  const S3 = importState(JSON.stringify({ tasks: [], logs: [], checks: { 'yurt:0': { t: 1, v: 1 }, 'yurt:10': { t: 1, v: 1 } } }));
+  ok(K.turnoverProgress(S3, 'yurt').done === 1, 'turnoverProgress counts only real checklist items — an out-of-range yurt:10 key is ignored');
+}
+{
+  // — attention ranks low-supply above a plain urgent (line 109 `kind === ‘low-supply’`) —
+  const S = newState();
+  logReading(S, { unit: 'yurt', meter: 'gas', value: 1, ts: 5 });   // low → auto-urgent job + a low-supply flag
+  ok(attention(S, 0)[0].kind === 'low-supply', 'in the attention list a low-supply ranks above a plain urgent job');
+
+  // — the created tiebreak in attention holds for BOTH insertion orders (line 107 both `created || 0`) —
+  const rev = newState();
+  addTask(rev, { unit: 'yurt', title: 'later', priority: 'urgent', ts: 5 });
+  addTask(rev, { unit: 'yurt', title: 'earlier', priority: 'urgent', ts: 3 });
+  const ra = attention(rev, 0).filter(x => x.kind === 'urgent').map(x => x.created);
+  ok(ra[0] === 3 && ra[1] === 5, 'two same-rank urgents sort oldest-first even when added newest-first');
+  const fwd = newState();
+  addTask(fwd, { unit: 'yurt', title: 'earlier', priority: 'urgent', ts: 3 });
+  addTask(fwd, { unit: 'yurt', title: 'later', priority: 'urgent', ts: 5 });
+  const fa = attention(fwd, 0).filter(x => x.kind === 'urgent').map(x => x.created);
+  ok(fa[0] === 3 && fa[1] === 5, 'two same-rank urgents sort oldest-first when added oldest-first too (both tiebreak operands pinned)');
+}
+{
+  // — openFor tiebreaks: oldest-first within a band, then by id (line 71 both `||`) —
+  const S = newState();
+  addTask(S, { unit: 'fern', title: 'later', priority: 'urgent', ts: 5 });
+  addTask(S, { unit: 'fern', title: 'earlier', priority: 'urgent', ts: 3 });
+  const of = openFor(S, 'fern');
+  ok(of[0].created === 3 && of[1].created === 5, 'within a priority band openFor is oldest-first (created tiebreak)');
+
+  const S2 = newState();
+  addTask(S2, { unit: 'yurt', title: 'A', priority: 'urgent', ts: 5 });
+  addTask(S2, { unit: 'yurt', title: 'B', priority: 'urgent', ts: 5 });   // same priority AND created
+  S2.tasks.reverse();                                                     // array order now disagrees with id order
+  const of2 = openFor(S2, 'yurt');
+  ok(of2[0].id.endsWith('-1') && of2[1].id.endsWith('-2'), 'a full tie (priority+created) resolves by id, not by array order');
+}
+{
+  // — merge is last-write-wins by TIME, not by JSON size (line 136 `===` and `&&`) —
+  const a = newState(); a.tasks = [{ id: 'x', title: 'aaa', updated: 20 }];   // newer, smaller JSON
+  const b = newState(); b.tasks = [{ id: 'x', title: 'zzz', updated: 10 }];   // older, larger JSON
+  const rec = merge(a, b).tasks.find(t => t.id === 'x');
+  ok(rec.updated === 20 && rec.title === 'aaa', 'merge keeps the NEWEST write even when the older record has a larger JSON (LWW by time)');
+
+  // — a timestamp tie resolves to the SAME record regardless of merge order (line 136 first `>`).
+  //   Compare the winning title directly — stateHash omits title, so it can't see this flip. —
+  const c = newState(); c.tasks = [{ id: 'y', title: 'aaa', updated: 5 }];
+  const d = newState(); d.tasks = [{ id: 'y', title: 'zzz', updated: 5 }];
+  ok(merge(c, d).tasks[0].title === merge(d, c).tasks[0].title, 'a same-timestamp task tie resolves to the same record in A⊕B and B⊕A (order-independent)');
+
+  // — a checklist tie keeps the first board deterministically (line 138 `nv.t > cur.t`) —
+  const e = newState(); e.checks = { 'yurt:0': { t: 5, v: 1 } };
+  const f = newState(); f.checks = { 'yurt:0': { t: 5, v: 0 } };
+  ok(K.turnoverProgress(merge(e, f), 'yurt').done === 1, 'on a same-timestamp checklist tie the first board wins — no silent flip on merge');
+}
+{
+  // — stateHash is pinned to a FIXED vector: locks the FNV loop bound (line 142) and cval’s
+  //   object/number handling (line 132 `===` and `&&`) against any single-operator drift —
+  const H = newState('A');
+  addTask(H, { unit: 'yurt', title: 'Hash me', priority: 'urgent', ts: 7 });
+  logReading(H, { unit: 'fern', meter: 'gas', value: 5, ts: 9 });   // healthy, raises nothing
+  H.checks = { 'yurt:0': { t: 7, v: 1 }, 'fern:2': 3 };             // object-form + legacy numeric-form
+  ok(stateHash(H) === 'd476965d', 'stateHash matches its fixed vector — the hash loop and cval normalisation are locked');
+}
+
+
+console.log('\n=== §9 · SYNC INTEGRITY — merge/export/import preserve logs, device id & seq (kills silent data-loss) ===');
+{
+  // merge must keep BOTH boards' supply-log readings. Auditor-found: a.logs||[] -> && drops one camp's logs on sync.
+  const A = newState('A'); logReading(A, { unit: 'yurt', meter: 'oil', value: 5, ts: 1 });
+  const B = newState('B'); logReading(B, { unit: 'fern', meter: 'oil', value: 2, ts: 2 });
+  const m = merge(A, B);
+  ok(m.logs.length === 2 && m.logs.some(r => r.unit === 'yurt') && m.logs.some(r => r.unit === 'fern'),
+     "merge keeps BOTH phones' supply-log readings — neither camp's oil log is dropped on sync");
+  // merged device id: a.dev || b.dev || 'local' — pin both branches.
+  ok(merge(newState('phoneA'), newState('phoneB')).dev === 'phoneA', 'merge keeps the first device id (a.dev)');
+  ok(merge({ ...newState('phoneA'), dev: '' }, newState('phoneB')).dev === 'phoneB', 'merge falls through to b.dev when a has none — not forced to local');
+  // merged seq = max of both — pin each operand as the max so an `x && 1` mutant changes it.
+  const s1 = merge(Object.assign(newState('A'), { seq: 9 }), Object.assign(newState('B'), { seq: 5 }));
+  const s2 = merge(Object.assign(newState('A'), { seq: 5 }), Object.assign(newState('B'), { seq: 9 }));
+  ok(s1.seq === 9 && s2.seq === 9, 'merge seq is the max of both sides (9), never reset to 1');
+  // export / import preserve a real device id (not masked to 'local').
+  ok(JSON.parse(exportState(newState('myphone'))).dev === 'myphone', 'export preserves the device id');
+  ok(importState(JSON.stringify({ v: 1, dev: 'myphone', tasks: [], logs: [], checks: {}, seq: 1 })).dev === 'myphone', 'import preserves the device id');
+  // import rejects a structurally-invalid board (missing tasks OR logs array) — pins the guard OR-chain.
+  ok(importState('{"tasks":[]}') === null && importState('{"logs":[]}') === null,
+     'a board missing its tasks OR logs array is rejected, not half-loaded');
+}
+
 const done = fail === 0;
 console.log('\n' + (done
   ? `=== ✅ WISHWOOD KEEPER — jobs, issues and off-grid supply logs for the four camps, on one board; the urgent stuff surfaces, a low supply raises itself, nothing is lost in a message · ${pass}/${pass} · zero tokens ===`
